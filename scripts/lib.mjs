@@ -24,10 +24,25 @@ export const FULL_PACK_KEYWORDS = [
   'Full Set', 'FullSet',
 ];
 
+// Substring sale keywords. NOT including bare 'SALE' — the English word "sale"
+// appears in legal text like "Prohibition of unauthorized sale" / "for sale" and
+// causes false positives. SALE-in-promo-context is handled by SALE_STRUCTURAL_RE
+// in parseSaleInfo (bracketed forms, suffix variants, ON SALE, etc.).
 export const SALE_KEYWORDS = [
-  '半額', 'セール', 'SALE', '割引', '特価', '特價',
+  '半額', 'セール', '割引', '特価', '特價',
   '大感謝', 'キャンペーン',
 ];
+
+// Structural promo patterns. Match BEFORE keyword substring check so the regex
+// can express "SALE in promo context" without firing on legal text like
+// "Prohibition of unauthorized sale" / "for sale".
+//
+// Patterns:
+//   \d+%OFF                                ← always promo
+//   [...SALE...] / 【...SALE...】          ← bracketed (allows emoji decorators inside)
+//   SALE! / SALE！ / SALE中                ← suffix
+//   ON SALE / BIG SALE / FLASH SALE / OPEN SALE / RELEASE SALE
+export const SALE_STRUCTURAL_RE = /\d+\s*[%％]\s*off|\[[^\]]{0,20}SALE[^\]]{0,20}\]|【[^】]{0,20}SALE[^】]{0,20}】|\bSALE\s*[!！中]|\b(?:ON|BIG|FLASH|OPEN|RELEASE)\s+SALE\b/i;
 
 // ─── URL helpers ──────────────────────────────────────────────────
 
@@ -159,7 +174,7 @@ export function parseSaleInfo(data, now = new Date()) {
   const text = `${data.name || ''}\n${data.description || ''}`;
   const lowered = text.toLowerCase();
   let onSale =
-    /\d+\s*[%％]\s*off/i.test(text) ||
+    SALE_STRUCTURAL_RE.test(text) ||
     SALE_KEYWORDS.some(k => lowered.includes(k.toLowerCase()));
   let saleEndDate = onSale ? parseSaleEndDate(text) : null;
 

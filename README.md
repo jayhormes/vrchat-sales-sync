@@ -47,6 +47,11 @@ node <SKILL_DIR>/scripts/refresh-sales.mjs --concurrency 5
 
 # Skip a shop entirely (repeatable)
 node <SKILL_DIR>/scripts/refresh-sales.mjs --skip-shop qrochairo
+
+# Single-page override (use after eyeballing dry-run's ambiguous list)
+node <SKILL_DIR>/scripts/refresh-sales.mjs --mark-off <booth_url>
+node <SKILL_DIR>/scripts/refresh-sales.mjs --mark-on  <booth_url> --until 2026-06-30
+node <SKILL_DIR>/scripts/refresh-sales.mjs --mark-on  <booth_url>   # open-ended
 ```
 
 ## What it touches

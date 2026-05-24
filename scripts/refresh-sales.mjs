@@ -21,14 +21,20 @@ import {
 } from './lib.mjs';
 
 function parseArgs(argv) {
-  const args = { dryRun: false, onlyFlagged: false, concurrency: 3, skipShops: [] };
+  const args = {
+    dryRun: false, onlyFlagged: false, concurrency: 3, skipShops: [],
+    markOff: null, markOn: null, markUntil: null,
+  };
   const rest = argv.slice(2);
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (a === '--dry-run') args.dryRun = true;
     else if (a === '--only-flagged') args.onlyFlagged = true;
-    else if (a === '--concurrency') args.concurrency = parseInt(rest[++i], 10) || 5;
-    else if (a === '--skip-shop') args.skipShops.push(rest[++i]);
+    else if (a === '--concurrency') args.concurrency = parseInt(rest[++i], 10) || 3;
+    else if (a === '--skip-shop')   args.skipShops.push(rest[++i]);
+    else if (a === '--mark-off')    args.markOff   = rest[++i];
+    else if (a === '--mark-on')     args.markOn    = rest[++i];
+    else if (a === '--until')       args.markUntil = rest[++i];
     else if (a === '-h' || a === '--help') args.help = true;
     else { console.error(`unknown arg: ${a}`); process.exit(1); }
   }
@@ -36,12 +42,21 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  console.log(`usage: refresh-sales.mjs [--dry-run] [--only-flagged] [--concurrency N] [--skip-shop SHOP]...
+  console.log(`usage:
+  refresh-sales.mjs [--dry-run] [--only-flagged] [--concurrency N] [--skip-shop SHOP]...
+  refresh-sales.mjs --mark-off <booth_url>                       [--dry-run]
+  refresh-sales.mjs --mark-on  <booth_url> [--until YYYY-MM-DD]  [--dry-run]
 
+Bulk refresh:
   --dry-run         print diff summary, don't write Notion
   --only-flagged    only check pages where 特價=true (fast: ~10s for ~100 items)
   --concurrency N   parallel booth fetches (default 3; raise carefully — booth 429s easily)
   --skip-shop SHOP  shop subdomain to skip (repeatable, e.g. --skip-shop qrochairo)
+
+Single-page override (LLM intervention for ambiguous cases):
+  --mark-off URL    set 特價=false, 特價至=null for the page matching that booth URL
+  --mark-on  URL    set 特價=true (optionally with --until YYYY-MM-DD as 特價至)
+  --until DATE      end date for --mark-on (YYYY-MM-DD; omit for open-ended sale)
 
 env:
   NOTION_API_KEY  Notion integration token (fallback: ~/.openclaw/openclaw.json)
@@ -114,7 +129,7 @@ async function checkOne(page, opts) {
     };
   }
 
-  const { onSale, saleEndDate } = parseSaleInfo(data);
+  const { onSale, saleEndDate, expired } = parseSaleInfo(data);
   const { price } = pickPrice(data);
   const next = { onSale, saleEndDate, price };
 
@@ -125,9 +140,25 @@ async function checkOne(page, opts) {
     diffs.price = [cur.price, next.price];
   }
 
+  // Ambiguous = script wants 特價=true but found no parseable end date.
+  // Could be an ongoing open-ended sale OR stale promo text the seller forgot
+  // to remove. Worth flagging for LLM/user review.
+  const ambiguous = next.onSale && !next.saleEndDate;
+  // Pull a short excerpt of the matched sale keyword neighborhood for review.
+  let saleExcerpt = null;
+  if (ambiguous) {
+    const desc = data.description || '';
+    const re = /(?:\d+\s*[%％]\s*off|半額|セール|sale|割引|特価|特價|大感謝|キャンペーン)/i;
+    const m = re.exec(desc);
+    if (m) saleExcerpt = desc.slice(Math.max(0, m.index - 60), m.index + 100).replace(/\s+/g, ' ').trim();
+  }
+
   return {
     page, cur, next,
     diffs,
+    expired,
+    ambiguous,
+    saleExcerpt,
     status: Object.keys(diffs).length ? 'changed' : 'unchanged',
   };
 }
@@ -148,6 +179,45 @@ function fmtDiff(d) {
   return parts.join('  ');
 }
 
+async function runMark(args, notion) {
+  if (args.markOff && args.markOn) die('--mark-off and --mark-on are mutually exclusive');
+  const url = args.markOff || args.markOn;
+  if (!isBoothUrl(url)) die(`URL is not a booth.pm item: ${url}`);
+  if (args.markUntil && !/^\d{4}-\d{2}-\d{2}$/.test(args.markUntil)) {
+    die(`--until must be YYYY-MM-DD (got: ${args.markUntil})`);
+  }
+  if (args.markOff && args.markUntil) {
+    die('--until has no effect with --mark-off');
+  }
+
+  // Find page by exact URL match; if missing, try the booth-normalized URL.
+  let page = await notion.findByUrl(NOTION_DB_ID, url);
+  if (!page) {
+    try {
+      const data = await fetchJson(toJsonUrl(url));
+      if (data?.url && data.url !== url) {
+        page = await notion.findByUrl(NOTION_DB_ID, data.url);
+      }
+    } catch { /* ignore — handled below */ }
+  }
+  if (!page) die(`no Notion page found with URL = ${url}`, 3);
+
+  const props = args.markOff
+    ? { '特價': { checkbox: false }, '特價至': { date: null } }
+    : { '特價': { checkbox: true  }, '特價至': { date: args.markUntil ? { start: args.markUntil } : null } };
+
+  console.log(`page:    ${page.id}`);
+  console.log(`title:   ${page.properties?.Name?.title?.[0]?.plain_text || '(no name)'}`);
+  console.log(`action:  ${args.markOff ? 'MARK OFF (特價=false)' : `MARK ON (特價=true${args.markUntil ? `, 特價至=${args.markUntil}` : ', open-ended'})`}`);
+
+  if (args.dryRun) {
+    console.log(`[dry-run] not writing`);
+    return;
+  }
+  const updated = await notion.updatePage(page.id, props);
+  console.log(`✓ updated  ${updated.url}`);
+}
+
 async function main() {
   const args = parseArgs(process.argv);
   if (args.help) { usage(); return; }
@@ -155,6 +225,11 @@ async function main() {
   const token = readToken();
   if (!token) die('NOTION_API_KEY not set (env or openclaw.json)', 2);
   const notion = new Notion(token);
+
+  // Single-page override mode short-circuits the bulk scan.
+  if (args.markOff || args.markOn) {
+    return runMark(args, notion);
+  }
 
   const queryBody = args.onlyFlagged
     ? { filter: { property: '特價', checkbox: { equals: true } } }
@@ -180,6 +255,8 @@ async function main() {
   };
   const changes = [];
   const errors  = [];
+  const expired = [];   // had past end date — auto-flipped to off
+  const ambiguous = []; // onSale=true but no parseable end date
   for (const r of results) {
     if (r.status === 'changed') {
       const kind = classifyChange(r.diffs);
@@ -191,15 +268,19 @@ async function main() {
     } else {
       tally[r.status]++;
     }
+    if (r.expired) expired.push(r);
+    if (r.ambiguous) ambiguous.push(r);
   }
 
   console.log(`\n=== summary (${elapsed}s) ===`);
   console.log(`checked:              ${results.length}`);
   console.log(`went on sale:         ${tally['went-on-sale']}`);
   console.log(`came off sale:        ${tally['came-off-sale']}`);
+  console.log(`  └ via expired date: ${expired.length}  (saleEndDate < today → auto off)`);
   console.log(`price changed:        ${tally['price-changed']}`);
   console.log(`sale-end-date diff:   ${tally['sale-end-date-changed']}`);
   console.log(`unchanged:            ${tally.unchanged}`);
+  console.log(`ambiguous:            ${ambiguous.length}  (特價=true but no parseable end date — LLM review)`);
   console.log(`errors (no write):    ${tally.error}`);
   console.log(`skipped (no URL):     ${tally['skipped-no-url']}`);
   console.log(`skipped (non-booth):  ${tally['skipped-non-booth']}`);
@@ -225,6 +306,17 @@ async function main() {
       console.log(`    ${e.cur.url}  →  ${e.error}`);
     }
     if (errors.length > 20) console.log(`  ...and ${errors.length - 20} more`);
+  }
+
+  if (ambiguous.length) {
+    console.log(`\n=== ambiguous (特價=true 但無法解析結束日期) ===`);
+    console.log(`(LLM 可逐筆 WebFetch booth 頁面確認後手動更新)`);
+    for (const a of ambiguous.slice(0, 30)) {
+      console.log(`  ${a.cur.name.slice(0, 60)}`);
+      console.log(`    ${a.cur.url}`);
+      if (a.saleExcerpt) console.log(`    excerpt: ...${a.saleExcerpt}...`);
+    }
+    if (ambiguous.length > 30) console.log(`  ...and ${ambiguous.length - 30} more`);
   }
 
   if (args.dryRun) {

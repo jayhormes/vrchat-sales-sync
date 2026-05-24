@@ -103,30 +103,79 @@ export function pickPrice(data) {
   return { price: prices.length ? Math.max(...prices) : null, isFullPack: false };
 }
 
-export function parseSaleEndDate(text) {
+export function parseSaleEndDate(text, now = new Date()) {
+  const pad = n => String(n).padStart(2, '0');
+
+  // ── full-year patterns (highest precision, try first) ──
+
+  // YYYY.MM.DD〜(YYYY.)MM.DD  (end year optional → inherit start year)
   const rangeRe = /(20\d{2})[.\-/年]\s*(\d{1,2})[.\-/月]\s*(\d{1,2})日?\s*[〜～~\-ー至–—]+\s*(?:(20\d{2})[.\-/年]\s*)?(\d{1,2})[.\-/月]\s*(\d{1,2})日?/;
   const r = rangeRe.exec(text);
   if (r) {
     const [, sy, , , ey, em, ed] = r;
-    return `${ey || sy}-${String(em).padStart(2, '0')}-${String(ed).padStart(2, '0')}`;
+    return `${ey || sy}-${pad(em)}-${pad(ed)}`;
   }
+
+  // YYYY.MM.DD まで | until
   const untilRe = /(20\d{2})[.\-/年]\s*(\d{1,2})[.\-/月]\s*(\d{1,2})日?\s*(?:まで|until)/i;
   const u = untilRe.exec(text);
-  if (u) {
-    const [, y, m, d] = u;
-    return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-  }
+  if (u) return `${u[1]}-${pad(u[2])}-${pad(u[3])}`;
+
+  // Until YYYY.MM.DD  (English "Until" prefix)
+  const untilPrefixRe = /Until\s+(20\d{2})[.\-/]\s*(\d{1,2})[.\-/]\s*(\d{1,2})/i;
+  const up = untilPrefixRe.exec(text);
+  if (up) return `${up[1]}-${pad(up[2])}-${pad(up[3])}`;
+
+  // ── short patterns, year inferred from `now` ──
+  // Sellers often write "5/24" or "5月24日" without year — assume current.
+  // If we guess wrong and the date is past, the expired-cutoff in
+  // parseSaleInfo flips onSale=false (conservative).
+  const year = now.getFullYear();
+
+  // M月D日 まで  (Japanese, very specific)
+  const jpUntilRe = /(\d{1,2})月(\d{1,2})日\s*まで/;
+  const ju = jpUntilRe.exec(text);
+  if (ju) return `${year}-${pad(+ju[1])}-${pad(+ju[2])}`;
+
+  // M月D日 〜 M月D日  (Japanese date range)
+  const jpRangeRe = /(\d{1,2})月(\d{1,2})日?\s*[〜～~\-ー至–—]+\s*(\d{1,2})月(\d{1,2})日?/;
+  const jr = jpRangeRe.exec(text);
+  if (jr) return `${year}-${pad(+jr[3])}-${pad(+jr[4])}`;
+
+  // M/D 〜 M/D  (short range with explicit separator)
+  const shortRangeRe = /(?<![\d/])(\d{1,2})\/(\d{1,2})\s*[〜～~\-ー至–—]+\s*(\d{1,2})\/(\d{1,2})(?![\d/])/;
+  const sr = shortRangeRe.exec(text);
+  if (sr) return `${year}-${pad(+sr[3])}-${pad(+sr[4])}`;
+
+  // M/D ... まで  (短 M/D 後接 まで，中間最多 20 個非數字字元，避免吃到無關內容)
+  const shortUntilRe = /(?<![\d/])(\d{1,2})\/(\d{1,2})(?:[^\d\n]{0,20})?まで/;
+  const su = shortUntilRe.exec(text);
+  if (su) return `${year}-${pad(+su[1])}-${pad(+su[2])}`;
+
   return null;
 }
 
-export function parseSaleInfo(data) {
+export function parseSaleInfo(data, now = new Date()) {
   const text = `${data.name || ''}\n${data.description || ''}`;
   const lowered = text.toLowerCase();
-  const onSale =
+  let onSale =
     /\d+\s*[%％]\s*off/i.test(text) ||
     SALE_KEYWORDS.some(k => lowered.includes(k.toLowerCase()));
-  const saleEndDate = onSale ? parseSaleEndDate(text) : null;
-  return { onSale, saleEndDate };
+  let saleEndDate = onSale ? parseSaleEndDate(text) : null;
+
+  // If we parsed an end date that's already past, the sale is over even though
+  // the seller hasn't cleaned up the promo text in the description. Override.
+  // (treat end-of-day in the date's nominal timezone as the cutoff)
+  let expired = false;
+  if (saleEndDate) {
+    const end = new Date(saleEndDate + 'T23:59:59');
+    if (!Number.isNaN(end.getTime()) && end < now) {
+      onSale = false;
+      saleEndDate = null;
+      expired = true;
+    }
+  }
+  return { onSale, saleEndDate, expired };
 }
 
 // ─── Notion token + client ────────────────────────────────────────

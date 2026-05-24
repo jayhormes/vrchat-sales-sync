@@ -27,9 +27,13 @@ node <SKILL_DIR>/scripts/refresh-sales.mjs
 
 # Quick sanity check (only items currently flagged 特價=true)
 node <SKILL_DIR>/scripts/refresh-sales.mjs --only-flagged
+
+# Single-page override for ambiguous cases (LLM intervention — see below)
+node <SKILL_DIR>/scripts/refresh-sales.mjs --mark-off <booth_url>
+node <SKILL_DIR>/scripts/refresh-sales.mjs --mark-on  <booth_url> --until 2026-06-30
 ```
 
-Output is a summary plus per-item diff. **Always run `--dry-run` first**, show the user the summary, then proceed if it looks reasonable.
+Output is a summary + per-item diff + an `=== ambiguous ===` block for cases the script can't auto-decide. **Always run `--dry-run` first**, show the user the summary, then proceed.
 
 ## What it modifies
 
@@ -64,12 +68,39 @@ Concurrency 3 with **exponential backoff on HTTP 429** (booth rate-limits easily
 
 ## Flags
 
+### Bulk scan (default mode)
 ```
 --dry-run         show diff, no writes
 --only-flagged    filter pages to 特價=true (fast partial-scan)
 --concurrency N   parallel booth fetches (default 3, raise carefully)
 --skip-shop SHOP  exclude a shop subdomain (e.g. --skip-shop qrochairo)
 ```
+
+### Single-page override (LLM intervention)
+```
+--mark-off URL                set 特價=false, 特價至=null for the page matching that booth URL
+--mark-on  URL [--until DATE] set 特價=true, optionally with 特價至=DATE (YYYY-MM-DD)
+                              omit --until for open-ended sale (特價至=null)
+```
+
+Override mode short-circuits the bulk scan — only the one page is touched.
+
+## LLM intervention workflow for ambiguous cases
+
+After a bulk dry-run, the `=== ambiguous ===` block lists items where the script detected sale keywords but couldn't parse an end date. Each row shows the URL + a 160-char description excerpt around the matched keyword.
+
+The LLM should:
+
+1. **Read each excerpt** in the dry-run output. Look for non-structured date hints (e.g. "release date 5/14 + 2週間" → sale ends ~5/28).
+2. **Optionally `WebFetch` the booth URL** if the excerpt is insufficient (rare).
+3. **Compare to today** to decide: still on sale OR stale promo text.
+4. **Commit the decision** via the override flags:
+   - Sale ended → `--mark-off <url>`
+   - Still on, with deducible end date → `--mark-on <url> --until 2026-MM-DD`
+   - Still on, open-ended → `--mark-on <url>` (no `--until`)
+5. **Process in batches**, the script returns immediately for each call (no scanning).
+
+When in doubt about whether a sale is still active, **default to `--mark-off`** (the conservative call — user can re-import if they were wrong).
 
 ## Requirements
 

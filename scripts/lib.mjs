@@ -124,7 +124,8 @@ export function parseSaleEndDate(text, now = new Date()) {
   // ── full-year patterns (highest precision, try first) ──
 
   // YYYY.MM.DD〜(YYYY.)MM.DD  (end year optional → inherit start year)
-  const rangeRe = /(20\d{2})[.\-/年]\s*(\d{1,2})[.\-/月]\s*(\d{1,2})日?\s*[〜～~\-ー至–—]+\s*(?:(20\d{2})[.\-/年]\s*)?(\d{1,2})[.\-/月]\s*(\d{1,2})日?/;
+  // Separators include → for price-arrow-style date ranges seen in some shops.
+  const rangeRe = /(20\d{2})[.\-/年]\s*(\d{1,2})[.\-/月]\s*(\d{1,2})日?\s*[〜～~\-ー至–—→]+\s*(?:(20\d{2})[.\-/年]\s*)?(\d{1,2})[.\-/月]\s*(\d{1,2})日?/;
   const r = rangeRe.exec(text);
   if (r) {
     const [, sy, , , ey, em, ed] = r;
@@ -141,6 +142,16 @@ export function parseSaleEndDate(text, now = new Date()) {
   const up = untilPrefixRe.exec(text);
   if (up) return `${up[1]}-${pad(up[2])}-${pad(up[3])}`;
 
+  // YYYY.M.D から N日間  (Japanese: start date + duration in days; inclusive)
+  // Example: "2024.2.27日から3日間" → end = 2024-02-29
+  const fromDurationRe = /(20\d{2})[.\-/]\s*(\d{1,2})[.\-/]\s*(\d{1,2})日?\s*から\s*(\d+)\s*日間/;
+  const fd = fromDurationRe.exec(text);
+  if (fd) {
+    const start = new Date(+fd[1], +fd[2] - 1, +fd[3]);
+    start.setDate(start.getDate() + (+fd[4]) - 1);
+    return `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;
+  }
+
   // ── short patterns, year inferred from `now` ──
   // Sellers often write "5/24" or "5月24日" without year — assume current.
   // If we guess wrong and the date is past, the expired-cutoff in
@@ -153,12 +164,12 @@ export function parseSaleEndDate(text, now = new Date()) {
   if (ju) return `${year}-${pad(+ju[1])}-${pad(+ju[2])}`;
 
   // M月D日 〜 M月D日  (Japanese date range)
-  const jpRangeRe = /(\d{1,2})月(\d{1,2})日?\s*[〜～~\-ー至–—]+\s*(\d{1,2})月(\d{1,2})日?/;
+  const jpRangeRe = /(\d{1,2})月(\d{1,2})日?\s*[〜～~\-ー至–—→]+\s*(\d{1,2})月(\d{1,2})日?/;
   const jr = jpRangeRe.exec(text);
   if (jr) return `${year}-${pad(+jr[3])}-${pad(+jr[4])}`;
 
-  // M/D 〜 M/D  (short range with explicit separator)
-  const shortRangeRe = /(?<![\d/])(\d{1,2})\/(\d{1,2})\s*[〜～~\-ー至–—]+\s*(\d{1,2})\/(\d{1,2})(?![\d/])/;
+  // M/D 〜 M/D  (short range with explicit separator, including → arrow)
+  const shortRangeRe = /(?<![\d/])(\d{1,2})\/(\d{1,2})\s*[〜～~\-ー至–—→]+\s*(\d{1,2})\/(\d{1,2})(?![\d/])/;
   const sr = shortRangeRe.exec(text);
   if (sr) return `${year}-${pad(+sr[3])}-${pad(+sr[4])}`;
 

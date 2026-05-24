@@ -124,8 +124,9 @@ export function parseSaleEndDate(text, now = new Date()) {
   // ── full-year patterns (highest precision, try first) ──
 
   // YYYY.MM.DD〜(YYYY.)MM.DD  (end year optional → inherit start year)
-  // Separators include → for price-arrow-style date ranges seen in some shops.
-  const rangeRe = /(20\d{2})[.\-/年]\s*(\d{1,2})[.\-/月]\s*(\d{1,2})日?\s*[〜～~\-ー至–—→]+\s*(?:(20\d{2})[.\-/年]\s*)?(\d{1,2})[.\-/月]\s*(\d{1,2})日?/;
+  // Separators include common Unicode "dash" decorators sellers use:
+  //   〜 ～ ~ - ー 至 – — → ─ ━ ═
+  const rangeRe = /(20\d{2})[.\-/年]\s*(\d{1,2})[.\-/月]\s*(\d{1,2})日?\s*[〜～~\-ー至–—→─━═]+\s*(?:(20\d{2})[.\-/年]\s*)?(\d{1,2})[.\-/月]\s*(\d{1,2})日?/;
   const r = rangeRe.exec(text);
   if (r) {
     const [, sy, , , ey, em, ed] = r;
@@ -164,12 +165,12 @@ export function parseSaleEndDate(text, now = new Date()) {
   if (ju) return `${year}-${pad(+ju[1])}-${pad(+ju[2])}`;
 
   // M月D日 〜 M月D日  (Japanese date range)
-  const jpRangeRe = /(\d{1,2})月(\d{1,2})日?\s*[〜～~\-ー至–—→]+\s*(\d{1,2})月(\d{1,2})日?/;
+  const jpRangeRe = /(\d{1,2})月(\d{1,2})日?\s*[〜～~\-ー至–—→─━═]+\s*(\d{1,2})月(\d{1,2})日?/;
   const jr = jpRangeRe.exec(text);
   if (jr) return `${year}-${pad(+jr[3])}-${pad(+jr[4])}`;
 
   // M/D 〜 M/D  (short range with explicit separator, including → arrow)
-  const shortRangeRe = /(?<![\d/])(\d{1,2})\/(\d{1,2})\s*[〜～~\-ー至–—→]+\s*(\d{1,2})\/(\d{1,2})(?![\d/])/;
+  const shortRangeRe = /(?<![\d/])(\d{1,2})\/(\d{1,2})\s*[〜～~\-ー至–—→─━═]+\s*(\d{1,2})\/(\d{1,2})(?![\d/])/;
   const sr = shortRangeRe.exec(text);
   if (sr) return `${year}-${pad(+sr[3])}-${pad(+sr[4])}`;
 

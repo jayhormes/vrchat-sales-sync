@@ -182,6 +182,23 @@ export function parseSaleEndDate(text, now = new Date()) {
   return null;
 }
 
+// Find "<old> → <new>" promo price pairs in description text.
+// Requires a currency marker (円 / ¥ / JPY / 엔) after the OLD number to avoid
+// false positives on version numbers / IDs / etc. Returns pairs where old > new.
+export function parsePriceArrows(text) {
+  const re = /(\d{1,3}(?:[,，]\d{3})*|\d{4,6})\s*(?:円|¥|JPY|엔)\s*(?:[→➡➜⇒]|->|=>)\s*(\d{1,3}(?:[,，]\d{3})*|\d{4,6})\s*(?:円|¥|JPY|엔)?/g;
+  const pairs = [];
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const oldP = parseInt(m[1].replace(/[,，]/g, ''), 10);
+    const newP = parseInt(m[2].replace(/[,，]/g, ''), 10);
+    if (oldP > newP && oldP > 0 && newP > 0) {
+      pairs.push({ old: oldP, new: newP });
+    }
+  }
+  return pairs;
+}
+
 export function parseSaleInfo(data, now = new Date()) {
   const text = `${data.name || ''}\n${data.description || ''}`;
   const lowered = text.toLowerCase();
@@ -189,11 +206,9 @@ export function parseSaleInfo(data, now = new Date()) {
     SALE_STRUCTURAL_RE.test(text) ||
     SALE_KEYWORDS.some(k => lowered.includes(k.toLowerCase()));
   let saleEndDate = onSale ? parseSaleEndDate(text) : null;
-
-  // If we parsed an end date that's already past, the sale is over even though
-  // the seller hasn't cleaned up the promo text in the description. Override.
-  // (treat end-of-day in the date's nominal timezone as the cutoff)
   let expired = false;
+
+  // (1) End-date cutoff: if the parsed end date is in the past, override.
   if (saleEndDate) {
     const end = new Date(saleEndDate + 'T23:59:59');
     if (!Number.isNaN(end.getTime()) && end < now) {
@@ -202,6 +217,28 @@ export function parseSaleInfo(data, now = new Date()) {
       expired = true;
     }
   }
+
+  // (2) Price-revert cross-check: if description has "<old>→<new>" promo pricing
+  // AND the current booth variation price matches an "old" (regular) figure but
+  // does NOT match any "new" (discount) figure, the sale has ended and the price
+  // reverted. This catches the case where the seller left the promo text but
+  // the actual price is back to normal — booth prices are authoritative.
+  if (onSale) {
+    const pairs = parsePriceArrows(text);
+    if (pairs.length > 0) {
+      const { price } = pickPrice(data);
+      if (typeof price === 'number') {
+        const matchesNew = pairs.some(p => p.new === price);
+        const matchesOld = pairs.some(p => p.old === price);
+        if (matchesOld && !matchesNew) {
+          onSale = false;
+          saleEndDate = null;
+          expired = true;
+        }
+      }
+    }
+  }
+
   return { onSale, saleEndDate, expired };
 }
 

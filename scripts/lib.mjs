@@ -124,9 +124,11 @@ export function parseSaleEndDate(text, now = new Date()) {
   // ── full-year patterns (highest precision, try first) ──
 
   // YYYY.MM.DD〜(YYYY.)MM.DD  (end year optional → inherit start year)
-  // Separators include common Unicode "dash" decorators sellers use:
-  //   〜 ～ ~ - ー 至 – — → ─ ━ ═
-  const rangeRe = /(20\d{2})[.\-/年]\s*(\d{1,2})[.\-/月]\s*(\d{1,2})日?\s*[〜～~\-ー至–—→─━═]+\s*(?:(20\d{2})[.\-/年]\s*)?(\d{1,2})[.\-/月]\s*(\d{1,2})日?/;
+  // Separators include common Unicode "dash" decorators: 〜 ～ ~ - ー 至 – — → ─ ━ ═
+  // The [^月年]{0,20}? gaps allow optional time/paren content between the date
+  // and the separator (e.g. "2026/05/21 (15:00) ～ 2026/05/28 (15:00)").
+  // Excluding 月/年 keeps the gap from crossing into another date component.
+  const rangeRe = /(20\d{2})[.\-/年]\s*(\d{1,2})[.\-/月]\s*(\d{1,2})日?[^月年]{0,20}?[〜～~\-ー至–—→─━═]+[^月年]{0,20}?(?:(20\d{2})[.\-/年]\s*)?(\d{1,2})[.\-/月]\s*(\d{1,2})日?/;
   const r = rangeRe.exec(text);
   if (r) {
     const [, sy, , , ey, em, ed] = r;
@@ -168,13 +170,14 @@ export function parseSaleEndDate(text, now = new Date()) {
   const ju = jpUntilRe.exec(text);
   if (ju) return `${year}-${pad(+ju[1])}-${pad(+ju[2])}`;
 
-  // M月D日 〜 M月D日  (Japanese date range)
-  const jpRangeRe = /(\d{1,2})月(\d{1,2})日?\s*[〜～~\-ー至–—→─━═]+\s*(\d{1,2})月(\d{1,2})日?/;
+  // M月D日 〜 M月D日  (Japanese date range, with time/paren gap allowed)
+  const jpRangeRe = /(\d{1,2})月(\d{1,2})日?[^月年]{0,20}?[〜～~\-ー至–—→─━═]+[^月年]{0,20}?(\d{1,2})月(\d{1,2})日?/;
   const jr = jpRangeRe.exec(text);
   if (jr) return `${year}-${pad(+jr[3])}-${pad(+jr[4])}`;
 
-  // M/D 〜 M/D  (short range with explicit separator, including → arrow)
-  const shortRangeRe = /(?<![\d/])(\d{1,2})\/(\d{1,2})\s*[〜～~\-ー至–—→─━═]+\s*(\d{1,2})\/(\d{1,2})(?![\d/])/;
+  // M/D 〜 M/D  (short range, with time/paren gap allowed)
+  // Excludes / and digits in the gap to avoid swallowing the next date.
+  const shortRangeRe = /(?<![\d/])(\d{1,2})\/(\d{1,2})[^月年/]{0,15}?[〜～~\-ー至–—→─━═]+[^月年/]{0,15}?(\d{1,2})\/(\d{1,2})(?![\d/])/;
   const sr = shortRangeRe.exec(text);
   if (sr) return `${year}-${pad(+sr[3])}-${pad(+sr[4])}`;
 

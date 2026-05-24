@@ -61,9 +61,10 @@ node <SKILL_DIR>/scripts/refresh-sales.mjs --mark-on  <booth_url>   # open-ended
 | 特價 | overwrite from booth |
 | 特價至 | overwrite from booth (parses `2026.05.20〜06.20まで` etc.) |
 | 價格 | overwrite if booth's current price differs |
+| **Name** | overwrite if title differs (sellers add/remove promo prefixes per sale cycle) |
 | everything else | **never modified** |
 
-User-managed fields (`已購買 / 購買日期 / 購買價格 / 購物車`) and importer-managed fields (`適用於 / 類型 / Name / Files & media / Full Set / 可用於同人製作`) are **left alone**.
+User-managed fields (`已購買 / 購買日期 / 購買價格 / 購物車`) and importer-managed fields (`適用於 / 類型 / Files & media / Full Set / 可用於同人製作`) are **left alone**.
 
 ## Edge cases
 

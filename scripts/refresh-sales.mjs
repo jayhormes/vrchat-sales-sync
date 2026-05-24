@@ -131,13 +131,19 @@ async function checkOne(page, opts) {
 
   const { onSale, saleEndDate, expired } = parseSaleInfo(data);
   const { price } = pickPrice(data);
-  const next = { onSale, saleEndDate, price };
+  const newName = (data.name || '').trim();
+  const next = { onSale, saleEndDate, price, name: newName };
 
   const diffs = {};
   if (cur.onSale !== next.onSale)             diffs.onSale = [cur.onSale, next.onSale];
   if (cur.saleEndDate !== next.saleEndDate)   diffs.saleEndDate = [cur.saleEndDate, next.saleEndDate];
   if (typeof next.price === 'number' && cur.price !== next.price) {
     diffs.price = [cur.price, next.price];
+  }
+  // Sellers often add/remove promo prefixes like "😇4周年50%OFF😇" with each sale —
+  // keep Name in sync with booth so the DB reflects current titles.
+  if (newName && cur.name !== newName) {
+    diffs.name = [cur.name, newName];
   }
 
   // Ambiguous = script wants 特價=true but found no parseable end date.
@@ -168,6 +174,7 @@ function classifyChange(diffs) {
   if (diffs.onSale && diffs.onSale[0] === true  && diffs.onSale[1] === false) return 'came-off-sale';
   if (diffs.price)        return 'price-changed';
   if (diffs.saleEndDate)  return 'sale-end-date-changed';
+  if (diffs.name)         return 'name-changed';
   return 'changed';
 }
 
@@ -176,6 +183,7 @@ function fmtDiff(d) {
   if (d.onSale)      parts.push(`特價 ${d.onSale[0]}→${d.onSale[1]}`);
   if (d.saleEndDate) parts.push(`特價至 ${d.saleEndDate[0] ?? 'null'}→${d.saleEndDate[1] ?? 'null'}`);
   if (d.price)       parts.push(`價格 ${d.price[0] ?? 'null'}→${d.price[1]}`);
+  if (d.name)        parts.push(`Name: ${d.name[0].slice(0, 40)} → ${d.name[1].slice(0, 40)}`);
   return parts.join('  ');
 }
 
@@ -248,11 +256,13 @@ async function main() {
 
   const tally = {
     'went-on-sale': 0, 'came-off-sale': 0,
-    'price-changed': 0, 'sale-end-date-changed': 0,
+    'price-changed': 0, 'sale-end-date-changed': 0, 'name-changed': 0,
     unchanged: 0,
     'skipped-no-url': 0, 'skipped-non-booth': 0, 'skipped-shop': 0,
     error: 0,
   };
+  // Track name changes separately for visibility (they can co-occur with sale changes).
+  let nameDiffs = 0;
   const changes = [];
   const errors  = [];
   const expired = [];   // had past end date — auto-flipped to off
@@ -262,6 +272,7 @@ async function main() {
       const kind = classifyChange(r.diffs);
       tally[kind]++;
       changes.push({ ...r, kind });
+      if (r.diffs.name) nameDiffs++;
     } else if (r.status === 'error') {
       tally.error++;
       errors.push(r);
@@ -279,6 +290,8 @@ async function main() {
   console.log(`  └ via expired date: ${expired.length}  (saleEndDate < today → auto off)`);
   console.log(`price changed:        ${tally['price-changed']}`);
   console.log(`sale-end-date diff:   ${tally['sale-end-date-changed']}`);
+  console.log(`name-only changes:    ${tally['name-changed']}`);
+  console.log(`name diffs (any cat): ${nameDiffs}  (Name updates included in the PATCHes above)`);
   console.log(`unchanged:            ${tally.unchanged}`);
   console.log(`ambiguous:            ${ambiguous.length}  (特價=true but no parseable end date — LLM review)`);
   console.log(`errors (no write):    ${tally.error}`);
@@ -288,8 +301,12 @@ async function main() {
 
   if (changes.length) {
     console.log(`\n=== changes ===`);
-    // Sort: came-off-sale first (highest signal), then went-on-sale, then price, then date.
-    const order = { 'came-off-sale': 0, 'went-on-sale': 1, 'price-changed': 2, 'sale-end-date-changed': 3, changed: 4 };
+    // Sort: came-off-sale first (highest signal), then went-on-sale, then price/date, then name-only.
+    const order = {
+      'came-off-sale': 0, 'went-on-sale': 1,
+      'price-changed': 2, 'sale-end-date-changed': 3,
+      'name-changed': 4, changed: 5,
+    };
     changes.sort((a, b) => order[a.kind] - order[b.kind]);
     for (const c of changes.slice(0, 50)) {
       console.log(`  [${c.kind}] ${c.cur.name.slice(0, 60)}`);
@@ -336,6 +353,9 @@ async function main() {
       '特價至': { date: c.next.saleEndDate ? { start: c.next.saleEndDate } : null },
     };
     if (typeof c.next.price === 'number') props['價格'] = { number: c.next.price };
+    if (c.diffs.name) {
+      props['Name'] = { title: [{ text: { content: c.next.name } }] };
+    }
     try {
       await notion.updatePage(c.page.id, props);
       written++;

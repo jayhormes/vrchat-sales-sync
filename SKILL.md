@@ -42,7 +42,8 @@ Output is a summary + per-item diff + an `=== ambiguous ===` block for cases the
 | 特價 | overwritten on every run (booth is source of truth) |
 | 特價至 | overwritten (re-parses description date pattern) |
 | 價格 | overwritten if booth's current price differs |
-| **all other fields** | **untouched** (適用於 / 類型 / Name / URL / Files & media / Full Set / 可用於同人製作 / 已購買 / 購買日期 / 購買價格 / 購物車) |
+| **Name** | overwritten if booth's title differs (sellers add/remove promo prefixes like `😇4周年50%OFF😇` with each sale) |
+| **all other fields** | **untouched** (適用於 / 類型 / URL / Files & media / Full Set / 可用於同人製作 / 已購買 / 購買日期 / 購買價格 / 購物車) |
 
 ## How it works
 

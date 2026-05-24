@@ -134,7 +134,10 @@ export function parseSaleEndDate(text, now = new Date()) {
   }
 
   // YYYY.MM.DD まで | until
-  const untilRe = /(20\d{2})[.\-/年]\s*(\d{1,2})[.\-/月]\s*(\d{1,2})日?\s*(?:まで|until)/i;
+  // Allow up to 20 non-月 chars between 日 and まで|until to catch
+  // "2025年9月30日24時まで" / "9月11日 23：59まで" etc.
+  // (excluding 月 prevents the gap from crossing into another date)
+  const untilRe = /(20\d{2})[.\-/年]\s*(\d{1,2})[.\-/月]\s*(\d{1,2})日?[^月]{0,20}?(?:まで|until)/i;
   const u = untilRe.exec(text);
   if (u) return `${u[1]}-${pad(u[2])}-${pad(u[3])}`;
 
@@ -159,8 +162,9 @@ export function parseSaleEndDate(text, now = new Date()) {
   // parseSaleInfo flips onSale=false (conservative).
   const year = now.getFullYear();
 
-  // M月D日 まで  (Japanese, very specific)
-  const jpUntilRe = /(\d{1,2})月(\d{1,2})日\s*まで/;
+  // M月D日 まで  (Japanese, year inferred from current)
+  // Same gap-allowance as untilRe — 日 and まで can be separated by time/parens.
+  const jpUntilRe = /(\d{1,2})月(\d{1,2})日[^月]{0,20}?まで/;
   const ju = jpUntilRe.exec(text);
   if (ju) return `${year}-${pad(+ju[1])}-${pad(+ju[2])}`;
 
